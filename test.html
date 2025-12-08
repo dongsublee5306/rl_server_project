@@ -1,0 +1,24 @@
+<!DOCTYPE html>
+<html>
+<body>
+<h2>RL Server Monitor</h2>
+<pre id="log"></pre>
+
+<script>
+const log = document.getElementById("log");
+const ws = new WebSocket("ws://127.0.0.1:8000/ws");
+
+ws.onopen = () => {
+  log.textContent += "✅ WebSocket connected\n";
+};
+
+ws.onmessage = (e) => {
+  log.textContent += e.data + "\n\n";
+};
+
+ws.onerror = (e) => {
+  log.textContent += "❌ WebSocket error\n";
+};
+</script>
+</body>
+</html>
