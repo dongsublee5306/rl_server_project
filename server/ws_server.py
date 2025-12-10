@@ -1,29 +1,33 @@
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from src.environment.env import Environment
-from src.contracts.action import Action
 from src.agent.q_agent import QAgent
+from src.contracts.action import Action
+import json
 
 app = FastAPI()
-
-env = Environment()
 agent = QAgent()
-
-# ✅ 학습 통계
-total_collisions = 0
-episode_steps = 0
-episode_history = []
 
 @app.websocket("/ws")
 async def websocket_endpoint(ws: WebSocket):
-    global total_collisions, episode_steps
-
     await ws.accept()
 
     try:
-        state = env.reset()
-        episode_steps = 0
+        # ✅ 1단계: 설정 수신
+        config_msg = await ws.receive_json()
 
-        # ✅ 초기 상태 전송
+        config = {
+            "lane": config_msg["lane"],
+            "obs": config_msg["obs"],
+            "frequency": config_msg["frequency"]
+        }
+        learn = config_msg["learn"]
+
+        env = Environment(config)
+        state = env.reset()
+        step_count = 0
+        collision_count = 0
+        history = []
+
         await ws.send_json({
             "type": "init",
             "state": {
@@ -33,19 +37,15 @@ async def websocket_endpoint(ws: WebSocket):
         })
 
         while True:
-            # ✅ 서버가 스스로 행동 선택
             action = agent.select_action(state)
-
-            # ✅ 환경 진행
             next_state, reward, done = env.step(action)
 
-            # ✅ 학습
-            agent.update(state, action, reward, next_state)
+            if learn:
+                agent.update(state, action, reward, next_state)
 
-            episode_steps += 1
             state = next_state
+            step_count += 1
 
-            # ✅ step 결과 전송
             await ws.send_json({
                 "type": "step",
                 "action": action.value,
@@ -54,27 +54,22 @@ async def websocket_endpoint(ws: WebSocket):
                     "car_lane": state.car_lane,
                     "obstacles": state.obstacles
                 },
-                "step": episode_steps,
-                "total_collisions": total_collisions
+                "step": step_count,
+                "collisions": collision_count
             })
 
-            # ✅ 충돌 → 에피소드 종료
             if done:
-                total_collisions += 1
-                episode_history.append(episode_steps)
-
-                avg_survival = sum(episode_history) / len(episode_history)
+                collision_count += 1
+                history.append(step_count)
 
                 await ws.send_json({
                     "type": "episode_end",
-                    "episode_survival": episode_steps,
-                    "average_survival": avg_survival,
-                    "total_collisions": total_collisions
+                    "survival": step_count,
+                    "avg_survival": sum(history) / len(history)
                 })
 
-                # ✅ 환경 리셋 (다음 학습 시작)
                 state = env.reset()
-                episode_steps = 0
+                step_count = 0
 
     except WebSocketDisconnect:
         print("client disconnected")
